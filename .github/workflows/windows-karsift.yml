@@ -1,0 +1,100 @@
+name: Karšift Windows x64
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*-karsift.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-karsift-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2.21.0
+        with:
+          flutter-version: '3.38.5'
+          cache: true
+      - run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run slang
+      - run: flutter test --no-pub
+
+  windows:
+    needs: test
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2.21.0
+        with:
+          flutter-version: '3.38.5'
+          cache: true
+      - name: Download verified native core
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'hiddify-lib-windows-amd64.tar.gz'
+          Invoke-WebRequest 'https://github.com/hiddify/hiddify-core/releases/download/draft/hiddify-lib-windows-amd64.tar.gz' -OutFile $archive
+          $expected = '9841148d26f5d39bb96949f54a8c61c7267bab878b0f9e6e6437a01e26b0c1d1'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'Native core changed; review and update the pinned digest before rebuilding.'
+          }
+          New-Item -ItemType Directory -Path hiddify-core/bin -Force | Out-Null
+          tar -xzf $archive -C hiddify-core/bin
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot extract native core' }
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run slang
+      - name: Build portable Windows x64
+        run: flutter build windows --release --target lib/main_prod.dart --dart-define=portable=true
+      - name: Package and checksum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = 'build/windows/x64/runner/Release'
+          foreach ($name in 'Hiddify.exe', 'HiddifyCli.exe', 'hiddify-core.dll', 'libcronet.dll', 'flutter_windows.dll') {
+            if (-not (Test-Path (Join-Path $bundle $name))) { throw "Missing runtime file: $name" }
+          }
+          $version = (Select-String '^version: (.+)$' pubspec.yaml).Matches[0].Groups[1].Value.Split('+')[0]
+          New-Item -ItemType Directory -Path out | Out-Null
+          $zip = "Hiddify-Karsift-$version-Windows-x64-Portable.zip"
+          Compress-Archive -Path "$bundle/*" -DestinationPath "out/$zip"
+          $hash = (Get-FileHash "out/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $zip" | Set-Content out/SHA256SUMS.txt -Encoding ascii
+          "Native core SHA256: 9841148d26f5d39bb96949f54a8c61c7267bab878b0f9e6e6437a01e26b0c1d1`nSource commit: $env:GITHUB_SHA" | Set-Content out/BUILD-INFO.txt
+      - uses: actions/upload-artifact@v6
+        with:
+          name: windows-x64-portable
+          path: out/*
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: windows-x64-portable
+          path: out
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Hiddify Karšift ${{ github.ref_name }} — Windows x64
+          prerelease: true
+          files: out/*
+          fail_on_unmatched_files: true
+          body: |
+            Windows 11 x64 portable test release with Lowest latency and Balance across all saved subscriptions.
+
+            Extract the ZIP into a writable folder and run Hiddify.exe. Data is stored beside the executable in hiddify_portable_data. This build is unsigned and has not yet passed owner device/network acceptance.
+
+            Import two subscriptions, select either All subscriptions entry from the home profile picker, then connect. Test normal traffic, source updates, restart persistence and switching back to a regular subscription. Only one Hiddify instance should run during testing. Avoid upstream update prompts while testing this fork.

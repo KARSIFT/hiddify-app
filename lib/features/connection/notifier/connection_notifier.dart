@@ -45,7 +45,7 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
       }
     });
 
-    ref.listen(activeProfileProvider.select((value) => value.asData?.value), (previous, next) async {
+    ref.listen(activeProfileProvider.select((value) => value.valueOrNull), (previous, next) async {
       if (previous == null) return;
       final shouldReconnect = next == null || previous.id != next.id;
       if (shouldReconnect) {

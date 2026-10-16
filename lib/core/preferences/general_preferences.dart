@@ -4,6 +4,7 @@ import 'package:hiddify/core/model/region.dart';
 import 'package:hiddify/core/preferences/actions_at_closing.dart';
 import 'package:hiddify/core/utils/preferences_utils.dart';
 import 'package:hiddify/features/app_based_routing/model/per_app_proxy_mode.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_sort_enum.dart';
 import 'package:hiddify/features/window/notifier/window_notifier.dart';
 import 'package:hiddify/utils/platform_utils.dart';
@@ -12,6 +13,13 @@ import 'package:hooks_riverpod/hooks_riverpod.dart';
 bool _debugIntroPage = false;
 
 abstract class Preferences {
+  static final aggregateMode = PreferencesNotifier.create<AggregateMode?, String>(
+    'aggregate_subscription_mode',
+    null,
+    mapFrom: (value) => AggregateMode.fromId(value),
+    mapTo: (value) => value?.id ?? '',
+  );
+
   static final introCompleted = PreferencesNotifier.create(
     "intro_completed",
     false,

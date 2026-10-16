@@ -9,6 +9,7 @@ import 'package:hiddify/core/preferences/general_preferences.dart';
 import 'package:hiddify/features/connection/notifier/connection_notifier.dart';
 import 'package:hiddify/features/profile/data/profile_data_providers.dart';
 import 'package:hiddify/features/profile/data/profile_repository.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/model/profile_sort_enum.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
@@ -47,7 +48,22 @@ class ProfilesNotifier extends _$ProfilesNotifier with AppLogger {
   @override
   Stream<List<ProfileEntity>> build() {
     final sort = ref.watch(profilesSortNotifierProvider);
-    return _profilesRepo.watchAll(sort: sort.by, sortMode: sort.mode).map((event) => event.getOrElse((l) => throw l));
+    final mode = ref.watch(Preferences.aggregateMode);
+    final t = ref.watch(translationsProvider).requireValue.pages.profiles;
+    return _profilesRepo.watchAll(sort: sort.by, sortMode: sort.mode).map((event) {
+      final profiles = event.getOrElse((l) => throw l);
+      if (profiles.isEmpty) return profiles;
+      return [
+        for (final choice in AggregateMode.values)
+          choice
+              .profile(
+                choice == AggregateMode.lowest ? t.allSubscriptionsLowest : t.allSubscriptionsBalance,
+                DateTime.fromMillisecondsSinceEpoch(0),
+              )
+              .copyWith(active: mode == choice),
+        for (final profile in profiles) profile.copyWith(active: mode == null && profile.active),
+      ];
+    });
   }
 
   ProfileRepository get _profilesRepo => ref.read(profileRepositoryProvider).requireValue;
@@ -55,10 +71,15 @@ class ProfilesNotifier extends _$ProfilesNotifier with AppLogger {
   Future<Unit> selectActiveProfile(String id) async {
     loggy.debug('changing active profile to: [$id]');
     await ref.read(hapticServiceProvider.notifier).lightImpact();
-    return _profilesRepo.setAsActive(id).getOrElse((err) {
-      loggy.warning('failed to set [$id] as active profile', err);
-      throw err;
-    }).run();
+    final mode = AggregateMode.fromId(id);
+    if (mode != null) {
+      await ref.read(Preferences.aggregateMode.notifier).update(mode);
+      return unit;
+    }
+    // Set the real profile first so leaving aggregate mode restores this choice.
+    await _profilesRepo.setAsActive(id).getOrElse((err) => throw err).run();
+    await ref.read(Preferences.aggregateMode.notifier).update(null);
+    return unit;
   }
 
   Future<void> togglePin(ProfileEntity profile) async {
@@ -73,8 +94,11 @@ class ProfilesNotifier extends _$ProfilesNotifier with AppLogger {
     loggy.debug('deleting profile: ${profile.name}');
 
     if (profile.active) await ref.read(connectionNotifierProvider.notifier).abortConnection();
+    // The picker clears the visual active flag while an aggregate is selected;
+    // the database still needs it to choose a fallback when this source is deleted.
+    final storedProfile = await _profilesRepo.getById(profile.id).getOrElse((err) => throw err).run();
     await _profilesRepo
-        .deleteById(profile.id, profile.active)
+        .deleteById(profile.id, storedProfile?.active ?? profile.active)
         .match(
           (err) {
             loggy.warning('failed to delete profile', err);
@@ -86,11 +110,17 @@ class ProfilesNotifier extends _$ProfilesNotifier with AppLogger {
             ref.read(inAppNotificationControllerProvider).showSuccessToast(t.pages.profiles.msg.delete.success);
 
             final activePrfile = await ref.read(activeProfileProvider.future);
+            final chainFallback = activePrfile != null && AggregateMode.fromId(activePrfile.id) != null
+                ? (await _profilesRepo.watchActiveProfile().first).getOrElse((err) => throw err)
+                : activePrfile;
             if (profile.id == ref.read(ConfigOptions.extraSecurityProfileId)) {
-              ref.read(ConfigOptions.extraSecurityProfileId.notifier).update(activePrfile?.id);
+              await ref.read(ConfigOptions.extraSecurityProfileId.notifier).update(chainFallback?.id);
             }
             if (profile.id == ref.read(ConfigOptions.unblockerProfileId)) {
-              ref.read(ConfigOptions.unblockerProfileId.notifier).update(activePrfile?.id);
+              await ref.read(ConfigOptions.unblockerProfileId.notifier).update(chainFallback?.id);
+            }
+            if (activePrfile != null && AggregateMode.fromId(activePrfile.id) != null) {
+              await ref.read(connectionNotifierProvider.notifier).reconnect(activePrfile);
             }
 
             return unit;

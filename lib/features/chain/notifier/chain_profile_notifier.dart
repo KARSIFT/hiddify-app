@@ -1,6 +1,7 @@
 import 'package:hiddify/features/chain/model/chain_enum.dart';
 import 'package:hiddify/features/profile/data/profile_data_providers.dart';
 import 'package:hiddify/features/profile/data/profile_repository.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
 import 'package:hiddify/features/settings/data/config_option_repository.dart';
@@ -13,7 +14,12 @@ class ChainProfileNotifier extends _$ChainProfileNotifier {
   ProfileRepository get _profilesRepo => ref.read(profileRepositoryProvider).requireValue;
   @override
   Future<ProfileEntity?> build(ChainType type) async {
-    final activeProfile = await ref.watch(activeProfileProvider.future);
+    final selectedProfile = await ref.watch(activeProfileProvider.future);
+    // A chain hop must be a real subscription, rather than the aggregate that
+    // will itself be routed through that hop.
+    final activeProfile = selectedProfile != null && AggregateMode.fromId(selectedProfile.id) != null
+        ? (await _profilesRepo.watchActiveProfile().first).getOrElse((err) => throw err)
+        : selectedProfile;
     final id = switch (type) {
       ChainType.extraSecurity => ref.watch(ConfigOptions.extraSecurityProfileId),
       ChainType.unblocker => ref.watch(ConfigOptions.unblockerProfileId),

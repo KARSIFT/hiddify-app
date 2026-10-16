@@ -4,11 +4,14 @@ import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/core/model/failures.dart';
 import 'package:hiddify/core/notification/in_app_notification_controller.dart';
 import 'package:hiddify/core/router/dialog/dialog_notifier.dart';
+import 'package:hiddify/features/connection/notifier/connection_notifier.dart';
 import 'package:hiddify/features/profile/data/profile_data_providers.dart';
 import 'package:hiddify/features/profile/data/profile_repository.dart';
 import 'package:hiddify/features/profile/details/profile_details_state.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/model/profile_failure.dart';
+import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
 import 'package:hiddify/utils/utils.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -111,7 +114,11 @@ class ProfileDetailsNotifier extends _$ProfileDetailsNotifier with AppLogger {
                     );
                 return false;
               },
-              (r) {
+              (r) async {
+                final active = await ref.read(activeProfileProvider.future);
+                if (active != null && AggregateMode.fromId(active.id) != null) {
+                  await ref.read(connectionNotifierProvider.notifier).reconnect(active);
+                }
                 ref.read(inAppNotificationControllerProvider).showSuccessToast(t.pages.profiles.msg.update.success);
                 return true;
               },
