@@ -94,8 +94,11 @@ class ProfilesNotifier extends _$ProfilesNotifier with AppLogger {
     loggy.debug('deleting profile: ${profile.name}');
 
     if (profile.active) await ref.read(connectionNotifierProvider.notifier).abortConnection();
+    // The picker clears the visual active flag while an aggregate is selected;
+    // the database still needs it to choose a fallback when this source is deleted.
+    final storedProfile = await _profilesRepo.getById(profile.id).getOrElse((err) => throw err).run();
     await _profilesRepo
-        .deleteById(profile.id, profile.active)
+        .deleteById(profile.id, storedProfile?.active ?? profile.active)
         .match(
           (err) {
             loggy.warning('failed to delete profile', err);
@@ -107,14 +110,17 @@ class ProfilesNotifier extends _$ProfilesNotifier with AppLogger {
             ref.read(inAppNotificationControllerProvider).showSuccessToast(t.pages.profiles.msg.delete.success);
 
             final activePrfile = await ref.read(activeProfileProvider.future);
-            if (activePrfile != null && AggregateMode.fromId(activePrfile.id) != null) {
-              await ref.read(connectionNotifierProvider.notifier).reconnect(activePrfile);
-            }
+            final chainFallback = activePrfile != null && AggregateMode.fromId(activePrfile.id) != null
+                ? (await _profilesRepo.watchActiveProfile().first).getOrElse((err) => throw err)
+                : activePrfile;
             if (profile.id == ref.read(ConfigOptions.extraSecurityProfileId)) {
-              ref.read(ConfigOptions.extraSecurityProfileId.notifier).update(activePrfile?.id);
+              await ref.read(ConfigOptions.extraSecurityProfileId.notifier).update(chainFallback?.id);
             }
             if (profile.id == ref.read(ConfigOptions.unblockerProfileId)) {
-              ref.read(ConfigOptions.unblockerProfileId.notifier).update(activePrfile?.id);
+              await ref.read(ConfigOptions.unblockerProfileId.notifier).update(chainFallback?.id);
+            }
+            if (activePrfile != null && AggregateMode.fromId(activePrfile.id) != null) {
+              await ref.read(connectionNotifierProvider.notifier).reconnect(activePrfile);
             }
 
             return unit;

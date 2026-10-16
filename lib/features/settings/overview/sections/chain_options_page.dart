@@ -4,6 +4,7 @@ import 'package:hiddify/core/model/optional_range.dart';
 import 'package:hiddify/features/chain/model/chain_enum.dart';
 import 'package:hiddify/features/chain/notifier/chain_profile_notifier.dart';
 import 'package:hiddify/features/chain/overview/chain_timeline.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
 import 'package:hiddify/features/profile/overview/profiles_notifier.dart';
@@ -20,7 +21,9 @@ class ChainOptionsPage extends HookConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final t = ref.watch(translationsProvider).requireValue;
     final theme = Theme.of(context);
-    final profiles = ref.watch(profilesNotifierProvider).value ?? [];
+    final profiles = (ref.watch(profilesNotifierProvider).value ?? <ProfileEntity>[])
+        .where((profile) => AggregateMode.fromId(profile.id) == null)
+        .toList();
     return Scaffold(
       appBar: AppBar(title: Text(t.pages.settings.chain.title)),
       body: ListView(
