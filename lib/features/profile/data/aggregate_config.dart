@@ -26,7 +26,8 @@
       // IDs prevent collisions even when providers and servers share names.
       final isCandidate = node['type'] != 'direct' && !tag.contains('§hide§');
       final hidden = useNativeLowest && isCandidate ? '' : ' §hide§';
-      names[tag.isEmpty ? '#$i' : tag] = '${source.name} / ${tag.isEmpty ? i : tag} [${source.id}:$i]$hidden';
+      final label = '${source.name} / ${tag.isEmpty ? i : tag} [${source.id}:$i]'.replaceAll('§default§', '');
+      names[tag.isEmpty ? '#$i' : tag] = '$label$hidden';
     }
     for (var i = 0; i < nodes.length; i++) {
       final node = nodes[i];
