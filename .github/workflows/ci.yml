@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   run:
-    if: github.repository != 'KARSIFT/hiddify-app' && !contains(github.event.head_commit.message, 'release: version')
+    if: "github.repository != 'KARSIFT/hiddify-app' && !contains(github.event.head_commit.message, 'release: version')"
     uses: ./.github/workflows/build.yml
     secrets: inherit
     permissions: write-all
