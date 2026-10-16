@@ -1,4 +1,4 @@
-name: Karšift Windows x64
+name: Karšift Windows and Android
 on:
   workflow_dispatch:
   push:
@@ -67,34 +67,112 @@ jobs:
           $zip = "Hiddify-Karsift-$version-Windows-x64-Portable.zip"
           Compress-Archive -Path "$bundle/*" -DestinationPath "out/$zip"
           $hash = (Get-FileHash "out/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $zip" | Set-Content out/SHA256SUMS.txt -Encoding ascii
-          "Native core SHA256: 9841148d26f5d39bb96949f54a8c61c7267bab878b0f9e6e6437a01e26b0c1d1`nSource commit: $env:GITHUB_SHA" | Set-Content out/BUILD-INFO.txt
+          "$hash  $zip" | Set-Content out/SHA256SUMS-Windows.txt -Encoding ascii
+          "Native core SHA256: 9841148d26f5d39bb96949f54a8c61c7267bab878b0f9e6e6437a01e26b0c1d1`nSource commit: $env:GITHUB_SHA" | Set-Content out/BUILD-INFO-Windows.txt
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $iscc = Get-ChildItem "${env:ProgramFiles(x86)}/Inno Setup*/ISCC.exe" | Select-Object -Last 1
+          if (-not $iscc) { throw 'Inno Setup is missing from this Windows runner' }
+          $version = (Select-String '^version: (.+)$' pubspec.yaml).Matches[0].Groups[1].Value.Split('+')[0]
+          & $iscc.FullName "/DAppVersion=$version" "/DBundleDir=$((Resolve-Path 'build/windows/x64/runner/Release').Path)" "/DReleaseDir=$((Resolve-Path out).Path)" windows/packaging/karsift.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed' }
+          $installer = Get-Item "out/Hiddify-Karsift-$version-Windows-x64-Setup.exe"
+          $hash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Add-Content out/SHA256SUMS-Windows.txt -Encoding ascii
       - uses: actions/upload-artifact@v6
         with:
-          name: windows-x64-portable
+          name: windows-installable
+          path: out/*
+          retention-days: 14
+
+  android:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ORG_GRADLE_PROJECT_karsiftBuild: 'true'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2.21.0
+        with:
+          flutter-version: '3.38.5'
+          cache: true
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;28.2.13676358'
+      - name: Download verified Android core
+        run: |
+          curl --fail --location --retry 3 https://github.com/hiddify/hiddify-core/releases/download/draft/hiddify-lib-android.tar.gz -o "$RUNNER_TEMP/android-core.tar.gz"
+          echo "f7d3440b15272401b79ce0f108fa27d14072142c5eca395687cc1e87add0f78e  $RUNNER_TEMP/android-core.tar.gz" | sha256sum --check
+          mkdir -p android/app/libs
+          tar -xzf "$RUNNER_TEMP/android-core.tar.gz" -C android/app/libs
+      - name: Prepare persistent release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KARSIFT_ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KARSIFT_ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          store = Path(os.environ['RUNNER_TEMP']) / 'karsift-release.p12'
+          store.write_bytes(base64.b64decode(os.environ['KEYSTORE_BASE64'], validate=True))
+          store.chmod(0o600)
+          password = os.environ['KEYSTORE_PASSWORD']
+          Path('android/key.properties').write_text(f'storeFile={store}\nstorePassword={password}\nkeyPassword={password}\nkeyAlias=karsift\n')
+          PY
+          keytool -list -keystore "$RUNNER_TEMP/karsift-release.p12" -storetype PKCS12 -storepass:env KEYSTORE_PASSWORD -alias karsift
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run slang
+      - name: Build signed Android APKs
+        run: flutter build apk --release --target lib/main_prod.dart --target-platform android-arm,android-arm64,android-x64
+      - name: Verify signature and package
+        run: |
+          version=$(sed -n 's/^version: \([^+]*\).*/\1/p' pubspec.yaml)
+          mkdir out
+          apk=build/app/outputs/flutter-apk/app-release.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk" > out/ANDROID-SIGNATURE.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" > "$RUNNER_TEMP/apk-badging.txt"
+          grep "package: name='com.karsift.hiddify'" "$RUNNER_TEMP/apk-badging.txt"
+          cp "$apk" "out/Hiddify-Karsift-$version-Android-universal.apk"
+          cd out
+          sha256sum *.apk > SHA256SUMS-Android.txt
+          printf 'Source commit: %s\nNative core SHA256: f7d3440b15272401b79ce0f108fa27d14072142c5eca395687cc1e87add0f78e\n' "$GITHUB_SHA" > BUILD-INFO-Android.txt
+      - uses: actions/upload-artifact@v6
+        with:
+          name: android-installable
           path: out/*
           retention-days: 14
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: windows
+    needs: [windows, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v7
         with:
-          name: windows-x64-portable
+          pattern: '*-installable'
+          merge-multiple: true
           path: out
       - uses: softprops/action-gh-release@v2
         with:
-          name: Hiddify Karšift ${{ github.ref_name }} — Windows x64
+          name: Hiddify Karšift ${{ github.ref_name }} — Windows and Android
           prerelease: true
           files: out/*
           fail_on_unmatched_files: true
           body: |
-            Windows 11 x64 portable test release with Lowest latency and Balance across all saved subscriptions.
+            Installable Windows 11 x64 and Android test release with Lowest latency and Balance across all saved subscriptions.
 
-            Extract the ZIP into a writable folder and run Hiddify.exe. Data is stored beside the executable in hiddify_portable_data. This build is unsigned and has not yet passed owner device/network acceptance.
+            Windows: run the Setup.exe for a per-user installation, or extract the portable ZIP. Both store data beside the executable in hiddify_portable_data. The Windows binaries are unsigned. The installer uses a separate Karšift folder and retains profile data on uninstall.
+
+            Android: install the signed universal APK. Its separate com.karsift.hiddify package can coexist with official Hiddify. Future Karšift APK updates use the same signing key. Device VPN permission must be granted by the owner.
 
             Import two subscriptions, select either All subscriptions entry from the home profile picker, then connect. Test normal traffic, source updates, restart persistence and switching back to a regular subscription. Only one Hiddify instance should run during testing. Avoid upstream update prompts while testing this fork.
