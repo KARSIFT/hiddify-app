@@ -71,7 +71,8 @@ android {
     }
 
     defaultConfig {
-        applicationId "app.hiddify.com"
+        applicationId project.findProperty('karsiftBuild') == 'true' ? 'com.karsift.hiddify' : 'app.hiddify.com'
+        manifestPlaceholders = [appLabel: project.findProperty('karsiftBuild') == 'true' ? 'Hiddify Karsift' : 'Hiddify']
         minSdkVersion flutter.minSdkVersion
         targetSdkVersion 36
         versionCode flutterVersionCode.toInteger()
