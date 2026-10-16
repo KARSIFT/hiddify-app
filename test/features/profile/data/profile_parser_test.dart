@@ -238,6 +238,19 @@ void main() {
       expect(jsonEncode(result.config), isNot(contains('one.example')));
     });
 
+    test('does not let imported default markers replace the native selector default', () {
+      final source = config('one.example');
+      ((source['outbounds'] as List).first as Map<String, dynamic>)['tag'] = 'same §default§';
+      final result = aggregateConfig([
+        (id: 'one', name: 'Provider §default§', config: source),
+        (id: 'two', name: 'Other', config: config('two.example')),
+      ], strategy: 'lowest-delay');
+      final out = (result.config['outbounds'] as List).cast<Map<String, dynamic>>();
+      expect(out.every((node) => !(node['tag'] as String).contains('§default§')), true);
+      expect(out.where((node) => !(node['tag'] as String).contains('§hide§')), hasLength(2));
+      expect(result.outboundTag, 'lowest');
+    });
+
     test('selects native Lowest after start and reload instead of restoring Balance', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await SharedPreferences.getInstance();
