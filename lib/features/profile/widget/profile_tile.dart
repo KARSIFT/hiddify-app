@@ -14,6 +14,7 @@ import 'package:hiddify/core/router/dialog/dialog_notifier.dart';
 import 'package:hiddify/core/router/go_router/helper/active_breakpoint_notifier.dart';
 import 'package:hiddify/core/widget/adaptive_icon.dart';
 import 'package:hiddify/core/widget/adaptive_menu.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/notifier/profile_notifier.dart';
 import 'package:hiddify/features/profile/overview/profiles_notifier.dart';
@@ -50,7 +51,7 @@ class ProfileTile extends HookConsumerWidget {
       _ => null,
     };
 
-    final showActionButton = profile is RemoteProfileEntity || !isMain;
+    final showActionButton = AggregateMode.fromId(profile.id) == null && (profile is RemoteProfileEntity || !isMain);
 
     void handleTap() {
       if (isMain) {
@@ -153,6 +154,8 @@ class ProfileTile extends HookConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _title(t, theme),
+              if (AggregateMode.fromId(profile.id) != null)
+                Text(t.pages.profiles.allSubscriptionsDescription, style: theme.textTheme.bodySmall),
               if (subInfo != null) ...[
                 const Gap(4),
                 RemainingTrafficIndicator(subInfo.ratio),

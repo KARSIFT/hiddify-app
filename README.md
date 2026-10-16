@@ -200,3 +200,12 @@ Hiddify is a community driven project. If you're interested in contributing, ple
 
 
 
+## Karšift: automatic selection across subscriptions
+
+The profile picker includes **All subscriptions · Lowest latency** and **All subscriptions · Balance** whenever at least one profile is saved. Select either entry from the home screen's profile card (or the desktop Profiles page), then connect. Lowest latency uses the native `lowest-delay` strategy. Balance follows the app's configured balance strategy.
+
+These virtual profiles combine all saved profiles, including local imports, using their latest cached server definitions. Existing automatic subscription updates still run. Additions, successful updates, edits and deletions rebuild the connected pool. Selecting a normal profile returns to selection within that profile. The selected global mode persists across restarts; the virtual entries cannot be edited, shared or deleted.
+
+Global DNS, routing and chain settings apply to the combined pool. Individual subscription headers and routing/DNS rules are not combined. Server tags are namespaced by profile ID; server detours to other server definitions in the same profile are preserved. Detours to discarded selector/test/balance groups produce an explicit error. Unreadable cached configs and an empty pool also produce an error. Expired subscriptions remain in the pool; native health checks determine server availability.
+
+Validation: generate code with `dart run build_runner build --delete-conflicting-outputs` and `dart run slang`, then run `flutter test test/features/profile/data/profile_parser_test.dart`. For device acceptance, import two subscriptions with distinct reachable servers, select each global mode, verify traffic and native server selection, stop the selected server and verify failover, update/delete a source, restart the app, and switch back to a normal subscription. Real-network failover requires device testing.

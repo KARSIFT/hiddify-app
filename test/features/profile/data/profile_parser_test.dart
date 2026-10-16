@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -5,10 +6,19 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fpdart/fpdart.dart';
 import 'package:hiddify/core/db/db.dart';
+import 'package:hiddify/core/db/provider/db_providers.dart';
+import 'package:hiddify/core/localization/translations.dart';
+import 'package:hiddify/core/preferences/general_preferences.dart';
+import 'package:hiddify/core/preferences/preferences_provider.dart';
+import 'package:hiddify/features/profile/data/aggregate_config.dart';
 import 'package:hiddify/features/profile/data/profile_data_mapper.dart';
 import 'package:hiddify/features/profile/data/profile_parser.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/model/profile_failure.dart';
+import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
+import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 /// Runs the real download → populate → parse flow for a remote profile from a
@@ -50,6 +60,110 @@ Map<String, dynamic> decodeOverride({Map<String, dynamic>? headers, UserOverride
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  group('all subscriptions', () {
+    test('persists global mode, restores a normal profile, and handles the last deletion', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final db = Db(NativeDatabase.memory());
+      addTearDown(db.close);
+      final profile = ProfileEntity.local(
+        id: 'one',
+        active: true,
+        name: 'Provider',
+        lastUpdate: DateTime(2026),
+        populatedHeaders: const {},
+      );
+      await db.into(db.profileEntries).insert(profile.toInsertEntry());
+      final container = ProviderContainer(
+        overrides: [
+          dbProvider.overrideWithValue(db),
+          sharedPreferencesProvider.overrideWith((ref) => prefs),
+          translationsProvider.overrideWith((ref) => TranslationsEn()),
+        ],
+      );
+      addTearDown(container.dispose);
+      await container.read(sharedPreferencesProvider.future);
+      await container.read(translationsProvider.future);
+      expect((await container.read(activeProfileProvider.future))?.id, 'one');
+      for (final mode in AggregateMode.values) {
+        await container.read(Preferences.aggregateMode.notifier).update(mode);
+        expect((await container.read(activeProfileProvider.future))?.id, mode.id);
+        expect(prefs.getString('aggregate_subscription_mode'), mode.id);
+      }
+      await container.read(Preferences.aggregateMode.notifier).update(null);
+      expect((await container.read(activeProfileProvider.future))?.id, 'one');
+      await container.read(Preferences.aggregateMode.notifier).update(AggregateMode.lowest);
+      await container.read(activeProfileProvider.future);
+      final empty = Completer<void>();
+      container.listen(activeProfileProvider, (_, next) {
+        if (next.hasValue && next.valueOrNull == null && !empty.isCompleted) empty.complete();
+      });
+      await db.delete(db.profileEntries).go();
+      await empty.future.timeout(const Duration(seconds: 5));
+    });
+
+    Map<String, dynamic> config(String host) => {
+      'outbounds': [
+        {'type': 'socks', 'tag': 'same', 'server': host, 'server_port': 1080, 'detour': 'dial'},
+        {'type': 'direct', 'tag': 'dial'},
+        {
+          'type': 'selector',
+          'tag': 'select',
+          'outbounds': ['same'],
+        },
+      ],
+    };
+
+    test('combines duplicate names, preserves detours and enforces the selected strategy', () {
+      for (final strategy in ['lowest-delay', 'round-robin', 'consistent-hashing', 'sticky-sessions']) {
+        final first = config('one.example');
+        final result = aggregateConfig([
+          (id: 'one', name: 'Provider', config: first),
+          (id: 'two', name: 'Provider', config: config('two.example')),
+        ], strategy: strategy);
+        final out = (result['outbounds'] as List).cast<Map<String, dynamic>>();
+        final group = out.first;
+        expect(group['strategy'], strategy);
+        expect(group['outbounds'], hasLength(2));
+        expect(out.map((o) => o['tag']).toSet(), hasLength(out.length));
+        final servers = out.where((o) => o['type'] == 'socks').toList();
+        expect(servers.map((o) => o['server']), ['one.example', 'two.example']);
+        for (final server in servers) {
+          expect(out.any((o) => o['type'] == 'direct' && o['tag'] == server['detour']), true);
+        }
+        expect(((first['outbounds'] as List).first as Map<String, dynamic>)['tag'], 'same');
+      }
+    });
+
+    test('supports endpoint-only subscriptions and removes stale servers on rebuild', () {
+      final result = aggregateConfig([
+        (
+          id: 'wg',
+          name: 'WireGuard',
+          config: {
+            'endpoints': [
+              {'type': 'wireguard', 'tag': 'vpn'},
+            ],
+          },
+        ),
+      ], strategy: 'lowest-delay');
+      expect(result['endpoints'], hasLength(1));
+      expect(((result['outbounds'] as List).first as Map<String, dynamic>)['outbounds'], hasLength(1));
+      expect(jsonEncode(result), isNot(contains('one.example')));
+    });
+
+    test('fails explicitly for an empty pool or a detour to a discarded group', () {
+      expect(() => aggregateConfig([], strategy: 'lowest-delay'), throwsFormatException);
+      final invalid = config('one.example');
+      ((invalid['outbounds'] as List).first as Map<String, dynamic>)['detour'] = 'select';
+      expect(
+        () => aggregateConfig([(id: 'one', name: 'Provider', config: invalid)], strategy: 'lowest-delay'),
+        throwsFormatException,
+      );
+    });
+  });
+
   const validBaseUrl = "https://example.com/configurations/user1/filename.yaml";
   const validExtendedUrl = "https://example.com/configurations/user1/filename.yaml?test#b";
   const validSupportUrl = "https://example.com/support";

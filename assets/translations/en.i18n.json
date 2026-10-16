@@ -130,6 +130,9 @@
       }
     },
     "profiles": {
+      "allSubscriptionsLowest": "All subscriptions · Lowest latency",
+      "allSubscriptionsBalance": "All subscriptions · Balance",
+      "allSubscriptionsDescription": "Automatically select servers across all saved profiles",
       "title": "Profiles",
       "add": "Add profile",
       "update": "Update profile",

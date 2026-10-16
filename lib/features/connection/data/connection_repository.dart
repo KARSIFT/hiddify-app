@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:fpdart/fpdart.dart';
 import 'package:hiddify/core/model/directories.dart';
 import 'package:hiddify/core/preferences/general_preferences.dart';
@@ -5,7 +7,10 @@ import 'package:hiddify/core/router/dialog/dialog_notifier.dart';
 import 'package:hiddify/core/utils/exception_handler.dart';
 import 'package:hiddify/features/connection/model/connection_failure.dart';
 import 'package:hiddify/features/connection/model/connection_status.dart';
+import 'package:hiddify/features/profile/data/aggregate_config.dart';
+import 'package:hiddify/features/profile/data/profile_data_providers.dart';
 import 'package:hiddify/features/profile/data/profile_path_resolver.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/settings/data/config_option_repository.dart';
 import 'package:hiddify/hiddifycore/hiddify_core_service.dart';
@@ -87,10 +92,12 @@ class ConnectionRepositoryImpl with ExceptionHandler, InfraLogger implements Con
 
   @override
   TaskEither<ConnectionFailure, Unit> connect(ProfileEntity activeProfile, bool disableMemoryLimit) => setup().flatMap(
-    (_) => applyConfigOption(activeProfile).flatMap(
-      (_) => singbox.start(profilePathResolver.file(activeProfile.id).path, activeProfile.name, disableMemoryLimit),
-      // .mapLeft(UnexpectedConnectionFailure.new),
-    ),
+    (_) => prepareProfile(activeProfile)
+        .flatMap((_) => applyConfigOption(activeProfile))
+        .flatMap(
+          (_) => singbox.start(profilePathResolver.file(activeProfile.id).path, activeProfile.name, disableMemoryLimit),
+          // .mapLeft(UnexpectedConnectionFailure.new),
+        ),
   );
 
   @override
@@ -98,12 +105,37 @@ class ConnectionRepositoryImpl with ExceptionHandler, InfraLogger implements Con
 
   @override
   TaskEither<ConnectionFailure, Unit> reconnect(ProfileEntity activeProfile, bool disableMemoryLimit) =>
-      applyConfigOption(activeProfile).flatMap(
-        // hot reload when possible, restart otherwise
-        (_) => singbox
-            .reload(profilePathResolver.file(activeProfile.id).path, activeProfile.name, disableMemoryLimit)
-            .mapLeft(UnexpectedConnectionFailure.new),
-      );
+      prepareProfile(activeProfile)
+          .flatMap((_) => applyConfigOption(activeProfile))
+          .flatMap(
+            // hot reload when possible, restart otherwise
+            (_) => singbox
+                .reload(profilePathResolver.file(activeProfile.id).path, activeProfile.name, disableMemoryLimit)
+                .mapLeft(UnexpectedConnectionFailure.new),
+          );
+
+  /// Rebuild on every connect/reload so additions, updates and removals are used.
+  TaskEither<ConnectionFailure, Unit> prepareProfile(ProfileEntity profile) => TaskEither.tryCatch(() async {
+    final mode = AggregateMode.fromId(profile.id);
+    if (mode == null) return unit;
+    final repo = await ref.read(profileRepositoryProvider.future);
+    final profiles = (await repo.watchAll().first).getOrElse((err) => throw err);
+    final sources = <({String id, String name, Map<String, dynamic> config})>[];
+    for (final source in profiles) {
+      final content = await profilePathResolver.file(source.id).readAsString();
+      sources.add((id: source.id, name: source.name, config: jsonDecode(content) as Map<String, dynamic>));
+    }
+    final strategy = mode == AggregateMode.lowest ? 'lowest-delay' : ref.read(ConfigOptions.balancerStrategy).key;
+    final content = jsonEncode(aggregateConfig(sources, strategy: strategy));
+    final temp = profilePathResolver.tempFile(profile.id);
+    try {
+      await temp.writeAsString(content, flush: true);
+      await temp.rename(profilePathResolver.file(profile.id).path);
+    } finally {
+      if (await temp.exists()) await temp.delete();
+    }
+    return unit;
+  }, (err, st) => ConnectionFailure.unexpected(err, st));
 
   @visibleForTesting
   TaskEither<ConnectionFailure, Unit> applyConfigOption(ProfileEntity prof) =>

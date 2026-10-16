@@ -13,6 +13,7 @@ import 'package:hiddify/features/connection/notifier/connection_notifier.dart';
 import 'package:hiddify/features/profile/add/model/free_profiles_model.dart';
 import 'package:hiddify/features/profile/data/profile_data_providers.dart';
 import 'package:hiddify/features/profile/data/profile_repository.dart';
+import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/model/profile_failure.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
@@ -84,8 +85,12 @@ class AddProfileNotifier extends _$AddProfileNotifier with AppLogger {
               loggy.warning("failed to add profile", err);
               throw err;
             },
-            (_) {
+            (_) async {
               loggy.info("successfully added profile");
+              final active = await ref.read(activeProfileProvider.future);
+              if (active != null && AggregateMode.fromId(active.id) != null) {
+                await ref.read(connectionNotifierProvider.notifier).reconnect(active);
+              }
               return unit;
             },
           )
@@ -104,8 +109,12 @@ class AddProfileNotifier extends _$AddProfileNotifier with AppLogger {
               loggy.warning("failed to add profile", err);
               throw err;
             },
-            (r) {
+            (r) async {
               loggy.info("successfully added profile, mark as active? [true]");
+              final active = await ref.read(activeProfileProvider.future);
+              if (active != null && AggregateMode.fromId(active.id) != null) {
+                await ref.read(connectionNotifierProvider.notifier).reconnect(active);
+              }
               return r;
             },
           )
@@ -144,8 +153,8 @@ class UpdateProfileNotifier extends _$UpdateProfileNotifier with AppLogger {
               loggy.info('successfully updated profile');
 
               await ref.read(activeProfileProvider.future).then((active) async {
-                if (active != null && active.id == profile.id) {
-                  await ref.read(connectionNotifierProvider.notifier).reconnect(profile);
+                if (active != null && (active.id == profile.id || AggregateMode.fromId(active.id) != null)) {
+                  await ref.read(connectionNotifierProvider.notifier).reconnect(active);
                 }
               });
               return unit;

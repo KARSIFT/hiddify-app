@@ -130,6 +130,9 @@
       }
     },
     "profiles": {
+      "allSubscriptionsLowest": "همه اشتراک‌ها · کمترین تأخیر",
+      "allSubscriptionsBalance": "همه اشتراک‌ها · توزیع بار",
+      "allSubscriptionsDescription": "انتخاب خودکار سرور از میان تمام پروفایل‌های ذخیره‌شده",
       "title": "پروفایل‌ها",
       "add": "افزودن پروفایل",
       "update": "به‌روزرسانی پروفایل",
