@@ -92,12 +92,13 @@ class ConnectionRepositoryImpl with ExceptionHandler, InfraLogger implements Con
 
   @override
   TaskEither<ConnectionFailure, Unit> connect(ProfileEntity activeProfile, bool disableMemoryLimit) => setup().flatMap(
-    (_) => prepareProfile(activeProfile)
-        .flatMap((_) => applyConfigOption(activeProfile))
-        .flatMap(
-          (_) => singbox.start(profilePathResolver.file(activeProfile.id).path, activeProfile.name, disableMemoryLimit),
-          // .mapLeft(UnexpectedConnectionFailure.new),
-        ),
+    (_) => prepareProfile(activeProfile).flatMap(
+      (outboundTag) => applyConfigOption(activeProfile).flatMap(
+        (_) => singbox
+            .start(profilePathResolver.file(activeProfile.id).path, activeProfile.name, disableMemoryLimit)
+            .flatMap((_) => _selectPreparedOutbound(outboundTag)),
+      ),
+    ),
   );
 
   @override
@@ -105,19 +106,39 @@ class ConnectionRepositoryImpl with ExceptionHandler, InfraLogger implements Con
 
   @override
   TaskEither<ConnectionFailure, Unit> reconnect(ProfileEntity activeProfile, bool disableMemoryLimit) =>
-      prepareProfile(activeProfile)
-          .flatMap((_) => applyConfigOption(activeProfile))
-          .flatMap(
-            // hot reload when possible, restart otherwise
-            (_) => singbox
-                .reload(profilePathResolver.file(activeProfile.id).path, activeProfile.name, disableMemoryLimit)
-                .mapLeft(UnexpectedConnectionFailure.new),
-          );
+      prepareProfile(activeProfile).flatMap(
+        // hot reload when possible, restart otherwise
+        (outboundTag) => applyConfigOption(activeProfile).flatMap(
+          (_) => singbox
+              .reload(profilePathResolver.file(activeProfile.id).path, activeProfile.name, disableMemoryLimit)
+              .mapLeft<ConnectionFailure>(UnexpectedConnectionFailure.new)
+              .flatMap((_) => _selectPreparedOutbound(outboundTag)),
+        ),
+      );
+
+  TaskEither<ConnectionFailure, Unit> _selectPreparedOutbound(String? outboundTag) {
+    if (outboundTag == null) return TaskEither.of(unit);
+    return TaskEither.tryCatch(() async {
+      try {
+        (await singbox.selectOutbound('select', outboundTag).run()).getOrElse((error) => throw error);
+      } catch (error, stack) {
+        // Never leave the core routing through its default Balance group when
+        // the requested automatic mode could not be selected.
+        try {
+          await singbox.stop().run();
+        } catch (stopError) {
+          loggy.warning('error stopping after outbound selection failed', stopError);
+        }
+        Error.throwWithStackTrace(error, stack);
+      }
+      return unit;
+    }, (error, stack) => ConnectionFailure.unexpected(error, stack));
+  }
 
   /// Rebuild on every connect/reload so additions, updates and removals are used.
-  TaskEither<ConnectionFailure, Unit> prepareProfile(ProfileEntity profile) => TaskEither.tryCatch(() async {
+  TaskEither<ConnectionFailure, String?> prepareProfile(ProfileEntity profile) => TaskEither.tryCatch(() async {
     final mode = AggregateMode.fromId(profile.id);
-    if (mode == null) return unit;
+    if (mode == null) return null;
     final repo = await ref.read(profileRepositoryProvider.future);
     final profiles = (await repo.watchAll().first).getOrElse((err) => throw err);
     final sources = <({String id, String name, Map<String, dynamic> config})>[];
@@ -126,7 +147,8 @@ class ConnectionRepositoryImpl with ExceptionHandler, InfraLogger implements Con
       sources.add((id: source.id, name: source.name, config: jsonDecode(content) as Map<String, dynamic>));
     }
     final strategy = mode == AggregateMode.lowest ? 'lowest-delay' : ref.read(ConfigOptions.balancerStrategy).key;
-    final content = jsonEncode(aggregateConfig(sources, strategy: strategy));
+    final aggregate = aggregateConfig(sources, strategy: strategy);
+    final content = jsonEncode(aggregate.config);
     final temp = profilePathResolver.tempFile(profile.id);
     try {
       await temp.writeAsString(content, flush: true);
@@ -134,7 +156,7 @@ class ConnectionRepositoryImpl with ExceptionHandler, InfraLogger implements Con
     } finally {
       if (await temp.exists()) await temp.delete();
     }
-    return unit;
+    return aggregate.outboundTag;
   }, (err, st) => ConnectionFailure.unexpected(err, st));
 
   @visibleForTesting

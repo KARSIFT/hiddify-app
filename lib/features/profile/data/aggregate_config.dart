@@ -1,12 +1,13 @@
 /// Combines the normalized, cached sing-box configs; never downloads subscriptions.
 /// Only server definitions are imported. Routing/DNS use the app's global settings.
-Map<String, dynamic> aggregateConfig(
+({Map<String, dynamic> config, String outboundTag}) aggregateConfig(
   List<({String id, String name, Map<String, dynamic> config})> sources, {
   required String strategy,
 }) {
   final outbounds = <Map<String, dynamic>>[];
   final endpoints = <Map<String, dynamic>>[];
   final candidates = <String>[];
+  final useNativeLowest = strategy == 'lowest-delay';
   const groups = {'selector', 'urltest', 'balancer', 'block', 'dns'};
 
   for (final source in sources) {
@@ -23,7 +24,9 @@ Map<String, dynamic> aggregateConfig(
         throw FormatException('Duplicate server tag in ${source.name}');
       }
       // IDs prevent collisions even when providers and servers share names.
-      names[tag.isEmpty ? '#$i' : tag] = '${source.name} / ${tag.isEmpty ? i : tag} [${source.id}:$i] §hide§';
+      final isCandidate = node['type'] != 'direct' && !tag.contains('§hide§');
+      final hidden = useNativeLowest && isCandidate ? '' : ' §hide§';
+      names[tag.isEmpty ? '#$i' : tag] = '${source.name} / ${tag.isEmpty ? i : tag} [${source.id}:$i]$hidden';
     }
     for (var i = 0; i < nodes.length; i++) {
       final node = nodes[i];
@@ -44,16 +47,22 @@ Map<String, dynamic> aggregateConfig(
     }
   }
   if (candidates.isEmpty) throw const FormatException('No usable servers across subscriptions');
-  // A single visible group makes the core select this algorithm by default,
-  // including after hot reload. Hidden server definitions remain its members.
-  outbounds.insert(0, {
-    'type': 'balancer',
-    'tag': 'All subscriptions',
-    'outbounds': candidates,
-    'strategy': strategy,
-    'delay_acceptable_ratio': 2,
-    'tolerance': 1,
-    'interrupt_exist_connections': true,
-  });
-  return {'outbounds': outbounds, if (endpoints.isNotEmpty) 'endpoints': endpoints};
+  if (!useNativeLowest) {
+    outbounds.insert(0, {
+      'type': 'balancer',
+      'tag': 'All subscriptions',
+      'outbounds': candidates,
+      'strategy': strategy,
+      'delay_acceptable_ratio': 2,
+      'tolerance': 1,
+      'interrupt_exist_connections': true,
+    });
+  }
+  // Visible servers let the core build its normal Lowest group ("lowest") over
+  // the entire pool. Select it explicitly: the core defaults to Balance and
+  // may restore a cached selection when connecting or hot reloading.
+  return (
+    config: {'outbounds': outbounds, if (endpoints.isNotEmpty) 'endpoints': endpoints},
+    outboundTag: useNativeLowest ? (candidates.length > 1 ? 'lowest' : candidates.single) : 'All subscriptions',
+  );
 }
