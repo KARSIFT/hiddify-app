@@ -10,13 +10,18 @@ import 'package:hiddify/core/db/provider/db_providers.dart';
 import 'package:hiddify/core/localization/translations.dart';
 import 'package:hiddify/core/preferences/general_preferences.dart';
 import 'package:hiddify/core/preferences/preferences_provider.dart';
+import 'package:hiddify/features/connection/data/connection_repository.dart';
+import 'package:hiddify/features/connection/model/connection_failure.dart';
 import 'package:hiddify/features/profile/data/aggregate_config.dart';
 import 'package:hiddify/features/profile/data/profile_data_mapper.dart';
 import 'package:hiddify/features/profile/data/profile_parser.dart';
+import 'package:hiddify/features/profile/data/profile_path_resolver.dart';
 import 'package:hiddify/features/profile/model/aggregate_profile.dart';
 import 'package:hiddify/features/profile/model/profile_entity.dart';
 import 'package:hiddify/features/profile/model/profile_failure.dart';
 import 'package:hiddify/features/profile/notifier/active_profile_notifier.dart';
+import 'package:hiddify/features/settings/data/config_option_repository.dart';
+import 'package:hiddify/hiddifycore/hiddify_core_service.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -57,6 +62,65 @@ void expectRemote(Either<ProfileFailure, ProfileEntity> either, void Function(Re
 Map<String, dynamic> decodeOverride({Map<String, dynamic>? headers, UserOverride? userOverride}) {
   return jsonDecode(ProfileParser.profileOverride(populatedHeaders: headers, userOverride: userOverride))
       as Map<String, dynamic>;
+}
+
+class _SelectionCore implements HiddifyCoreService {
+  String selected = 'balance';
+  bool failSelection = false;
+
+  @override
+  TaskEither<String, Unit> setup() => TaskEither.of(unit);
+
+  @override
+  TaskEither<String, Unit> stop() => TaskEither(() async {
+    selected = 'stopped';
+    return right(unit);
+  });
+
+  @override
+  TaskEither<ConnectionFailure, Unit> start(String path, String name, bool disableMemoryLimit) => TaskEither(() async {
+    selected = 'balance';
+    return right(unit);
+  });
+
+  @override
+  TaskEither<String, Unit> reload(String path, String name, bool disableMemoryLimit) => TaskEither(() async {
+    selected = 'balance';
+    return right(unit);
+  });
+
+  @override
+  TaskEither<String, Unit> selectOutbound(String groupTag, String outboundTag) => TaskEither(() async {
+    expect(groupTag, 'select');
+    if (failSelection) return left('selection failed');
+    selected = outboundTag;
+    return right(unit);
+  });
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError(invocation.memberName.toString());
+}
+
+class _SelectionRepository extends ConnectionRepositoryImpl {
+  _SelectionRepository(Ref ref, _SelectionCore core, SharedPreferences prefs, this.selection)
+    : super(
+        ref: ref,
+        singbox: core,
+        directories: (baseDir: Directory.systemTemp, workingDir: Directory.systemTemp, tempDir: Directory.systemTemp),
+        profilePathResolver: ProfilePathResolver(Directory.systemTemp),
+        configOptionRepository: ConfigOptionRepository(
+          preferences: prefs,
+          getConfigOptions: () => throw UnimplementedError(),
+        ),
+      );
+
+  final String? selection;
+
+  @override
+  TaskEither<ConnectionFailure, String?> prepareProfile(ProfileEntity profile) => TaskEither.of(selection);
+
+  @override
+  TaskEither<ConnectionFailure, Unit> applyConfigOption(ProfileEntity profile) => TaskEither.of(unit);
 }
 
 void main() {
@@ -112,6 +176,17 @@ void main() {
           'tag': 'select',
           'outbounds': ['same'],
         },
+        {
+          'type': 'balancer',
+          'tag': 'balance',
+          'outbounds': ['same'],
+          'strategy': 'round-robin',
+        },
+        {
+          'type': 'urltest',
+          'tag': 'auto',
+          'outbounds': ['same'],
+        },
       ],
     };
 
@@ -122,10 +197,18 @@ void main() {
           (id: 'one', name: 'Provider', config: first),
           (id: 'two', name: 'Provider', config: config('two.example')),
         ], strategy: strategy);
-        final out = (result['outbounds'] as List).cast<Map<String, dynamic>>();
-        final group = out.first;
-        expect(group['strategy'], strategy);
-        expect(group['outbounds'], hasLength(2));
+        final out = (result.config['outbounds'] as List).cast<Map<String, dynamic>>();
+        if (strategy == 'lowest-delay') {
+          expect(result.outboundTag, 'lowest');
+          expect(out.any((o) => {'balancer', 'urltest', 'selector'}.contains(o['type'])), false);
+          expect(out.where((o) => !(o['tag'] as String).contains('§hide§')), hasLength(2));
+        } else {
+          final group = out.first;
+          expect(result.outboundTag, group['tag']);
+          expect(group['strategy'], strategy);
+          expect(group['outbounds'], hasLength(2));
+          expect(out.where((o) => o['type'] == 'balancer'), hasLength(1));
+        }
         expect(out.map((o) => o['tag']).toSet(), hasLength(out.length));
         final servers = out.where((o) => o['type'] == 'socks').toList();
         expect(servers.map((o) => o['server']), ['one.example', 'two.example']);
@@ -148,9 +231,43 @@ void main() {
           },
         ),
       ], strategy: 'lowest-delay');
-      expect(result['endpoints'], hasLength(1));
-      expect(((result['outbounds'] as List).first as Map<String, dynamic>)['outbounds'], hasLength(1));
-      expect(jsonEncode(result), isNot(contains('one.example')));
+      expect(result.config['endpoints'], hasLength(1));
+      expect(result.config['outbounds'], isEmpty);
+      expect(result.outboundTag, ((result.config['endpoints'] as List).single as Map)['tag']);
+      expect(result.outboundTag, isNot(contains('§hide§')));
+      expect(jsonEncode(result.config), isNot(contains('one.example')));
+    });
+
+    test('selects native Lowest after start and reload instead of restoring Balance', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final profile = AggregateMode.lowest.profile('All subscriptions', DateTime(2026));
+      for (final target in ['lowest', 'only-server', 'All subscriptions', null]) {
+        final core = _SelectionCore();
+        final provider = Provider((ref) => _SelectionRepository(ref, core, prefs, target));
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final repo = container.read(provider);
+        expect((await repo.connect(profile, false).run()).isRight(), true);
+        expect(core.selected, target ?? 'balance');
+        expect((await repo.reconnect(profile, false).run()).isRight(), true);
+        expect(core.selected, target ?? 'balance');
+      }
+    });
+
+    test('reports a failed native selection instead of silently using Balance', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+      final core = _SelectionCore()..failSelection = true;
+      final provider = Provider((ref) => _SelectionRepository(ref, core, prefs, 'lowest'));
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final repo = container.read(provider);
+      final profile = AggregateMode.lowest.profile('All subscriptions', DateTime(2026));
+      expect((await repo.connect(profile, false).run()).isLeft(), true);
+      expect(core.selected, 'stopped');
+      expect((await repo.reconnect(profile, false).run()).isLeft(), true);
+      expect(core.selected, 'stopped');
     });
 
     test('fails explicitly for an empty pool or a detour to a discarded group', () {
@@ -461,7 +578,10 @@ void main() {
 
   group("content-disposition (#6)", () {
     test("reads the quoted ASCII form", () {
-      expect(ProfileParser.filenameFromContentDisposition('attachment; filename="MyProfile.txt"'), equals("MyProfile.txt"));
+      expect(
+        ProfileParser.filenameFromContentDisposition('attachment; filename="MyProfile.txt"'),
+        equals("MyProfile.txt"),
+      );
     });
 
     test("decodes the RFC 5987 extended form (non-ASCII)", () {
@@ -622,20 +742,18 @@ void main() {
 
     test("whitespace content-disposition falls through to the url fragment", () {
       expectRemote(
-        parseRemoteWithHeaders(
-          {"content-disposition": whitespaceContentDisposition},
-          url: "https://example.com/config#RealName",
-        ),
+        parseRemoteWithHeaders({
+          "content-disposition": whitespaceContentDisposition,
+        }, url: "https://example.com/config#RealName"),
         (rp) => expect(rp.name, equals("RealName")),
       );
     });
 
     test("whitespace content-disposition falls through to the url filename", () {
       expectRemote(
-        parseRemoteWithHeaders(
-          {"content-disposition": whitespaceContentDisposition},
-          url: "https://example.com/myconfig.json",
-        ),
+        parseRemoteWithHeaders({
+          "content-disposition": whitespaceContentDisposition,
+        }, url: "https://example.com/myconfig.json"),
         (rp) => expect(rp.name, equals("myconfig")),
       );
     });
@@ -774,10 +892,8 @@ void main() {
   });
 
   group("populateHeaders - fragment/extra-security intake", () {
-    Map<String, dynamic> populate(Map<String, dynamic> remoteHeaders) => ProfileParser.populateHeaders(
-      content: '',
-      remoteHeaders: remoteHeaders,
-    ).getOrElse((_) => <String, dynamic>{});
+    Map<String, dynamic> populate(Map<String, dynamic> remoteHeaders) =>
+        ProfileParser.populateHeaders(content: '', remoteHeaders: remoteHeaders).getOrElse((_) => <String, dynamic>{});
 
     test("empty fragment header is dropped", () {
       expect(populate({"fragment": ""}).containsKey("fragment"), isFalse);
