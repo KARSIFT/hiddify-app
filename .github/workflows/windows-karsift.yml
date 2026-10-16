@@ -1,6 +1,15 @@
 name: Karšift Windows and Android
 on:
   workflow_dispatch:
+    inputs:
+      release-tag:
+        description: 'Optional tag to create and publish from this commit'
+        type: string
+        default: ''
+      reuse-android-run:
+        description: 'Optional successful Android artifact run (Android sources must be unchanged)'
+        type: string
+        default: ''
   push:
     tags: ['v*-karsift.*']
 
@@ -88,6 +97,7 @@ jobs:
           retention-days: 14
 
   android:
+    if: inputs.reuse-android-run == ''
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -151,20 +161,37 @@ jobs:
           retention-days: 14
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && needs.windows.result == 'success' && (needs.android.result == 'success' || (needs.android.result == 'skipped' && inputs.reuse-android-run != '')) && (startsWith(github.ref, 'refs/tags/') || inputs.release-tag != '')
     needs: [windows, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v7
         with:
-          pattern: '*-installable'
-          merge-multiple: true
+          name: windows-installable
           path: out
+      - uses: actions/download-artifact@v7
+        with:
+          name: android-installable
+          run-id: ${{ inputs.reuse-android-run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: out
+      - name: Verify reused APK source compatibility
+        if: inputs.reuse-android-run != ''
+        run: |
+          source=$(sed -n 's/^Source commit: //p' out/BUILD-INFO-Android.txt)
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git diff --exit-code "$source" "$GITHUB_SHA" -- . ':!windows/**' ':!.github/**'
       - uses: softprops/action-gh-release@v2
         with:
-          name: Hiddify Karšift ${{ github.ref_name }} — Windows and Android
+          name: Hiddify Karšift ${{ inputs.release-tag || github.ref_name }} — Windows and Android
+          tag_name: ${{ inputs.release-tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           prerelease: true
           files: out/*
           fail_on_unmatched_files: true

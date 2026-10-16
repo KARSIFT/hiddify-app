@@ -55,6 +55,16 @@ add_subdirectory("runner")
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
+# Match sentry_flutter 8.14.2's pinned native SDK. Its official release archive
+# includes vendored dependencies, avoiding recursive clones from googlesource.
+# FetchContent uses the first declaration, so the plugin reuses this archive.
+include(FetchContent)
+FetchContent_Declare(
+  sentry-native
+  URL https://github.com/getsentry/sentry-native/releases/download/0.7.20/sentry-native.zip
+  URL_HASH SHA256=bf8afca08506cd3f48c273ccf75bee37b030392369317afc40188bf478aa6902
+  EXCLUDE_FROM_ALL
+)
 include(flutter/generated_plugins.cmake)
 
 
