@@ -199,7 +199,7 @@ jobs:
         run: flutter build macos --release --target lib/main_prod.dart
       - name: Build iOS application for later signing
         if: matrix.platform == 'ios'
-        run: flutter build ios --release --no-codesign --target lib/main_prod.dart
+        run: flutter build ios --release --no-codesign --target lib/main_prod.dart --verbose
       - name: Package Apple build
         env:
           PLATFORM: ${{ matrix.platform }}
