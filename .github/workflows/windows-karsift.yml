@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: windows-karsift-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') }}
 
 jobs:
   test:
