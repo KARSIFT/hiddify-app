@@ -7,6 +7,7 @@
 
 import Foundation
 import HiddifyCore
+import Network
 import NetworkExtension
 import UserNotifications
 
@@ -264,7 +265,6 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     private var nwMonitor: NWPathMonitor?
 
     public func startDefaultInterfaceMonitor(_ listener: LibboxInterfaceUpdateListenerProtocol?) throws {
-        return
         guard let listener else {
             return
         }
@@ -283,7 +283,6 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     }
 
     private func onUpdateDefaultInterface(_ listener: LibboxInterfaceUpdateListenerProtocol, _ path: Network.NWPath) {
-        return
         guard path.status != .unsatisfied,
               let defaultInterface = path.availableInterfaces.first
         else {
@@ -299,7 +298,6 @@ public class ExtensionPlatformInterface: NSObject, LibboxPlatformInterfaceProtoc
     }
 
     public func getInterfaces() throws -> LibboxNetworkInterfaceIteratorProtocol {
-        throw NSError(domain: "not implemented", code: 0)
         guard let nwMonitor else {
             throw NSError(domain: "ExtensionPlatformInterface", code: 0, userInfo: [NSLocalizedDescriptionKey: String(localized: "NWMonitor not started")])
         }
