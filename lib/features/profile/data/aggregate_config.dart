@@ -18,20 +18,20 @@
     final names = <String, String>{};
     for (var i = 0; i < nodes.length; i++) {
       final node = nodes[i];
-      if (groups.contains(node['type'])) continue;
+      if (groups.contains(node['type']) || node['outbounds'] is List) continue;
       final tag = node['tag'] as String? ?? '';
       if (tag.isNotEmpty && names.containsKey(tag)) {
         throw FormatException('Duplicate server tag in ${source.name}');
       }
       // IDs prevent collisions even when providers and servers share names.
       final isCandidate = node['type'] != 'direct' && !tag.contains('§hide§');
-      final hidden = useNativeLowest && isCandidate ? '' : ' §hide§';
+      final hidden = isCandidate ? '' : ' §hide§';
       final label = '${source.name} / ${tag.isEmpty ? i : tag} [${source.id}:$i]'.replaceAll('§default§', '');
       names[tag.isEmpty ? '#$i' : tag] = '$label$hidden';
     }
     for (var i = 0; i < nodes.length; i++) {
       final node = nodes[i];
-      if (groups.contains(node['type'])) continue;
+      if (groups.contains(node['type']) || node['outbounds'] is List) continue;
       final tag = node['tag'] as String? ?? '';
       final renamed = names[tag.isEmpty ? '#$i' : tag]!;
       final copy = <String, dynamic>{...node, 'tag': renamed};
@@ -48,22 +48,12 @@
     }
   }
   if (candidates.isEmpty) throw const FormatException('No usable servers across subscriptions');
-  if (!useNativeLowest) {
-    outbounds.insert(0, {
-      'type': 'balancer',
-      'tag': 'All subscriptions',
-      'outbounds': candidates,
-      'strategy': strategy,
-      'delay_acceptable_ratio': 2,
-      'tolerance': 1,
-      'interrupt_exist_connections': true,
-    });
-  }
-  // Visible servers let the core build its normal Lowest group ("lowest") over
-  // the entire pool. Select it explicitly: the core defaults to Balance and
-  // may restore a cached selection when connecting or hot reloading.
+  // Both modes use the core's native groups over the same flat server pool.
+  // Never add a custom balancer to that pool: the core can treat it as another
+  // server and build automatic groups around it. Explicit selection also
+  // overrides the core's default and any previously cached choice.
   return (
     config: {'outbounds': outbounds, if (endpoints.isNotEmpty) 'endpoints': endpoints},
-    outboundTag: useNativeLowest ? (candidates.length > 1 ? 'lowest' : candidates.single) : 'All subscriptions',
+    outboundTag: candidates.length == 1 ? candidates.single : (useNativeLowest ? 'lowest' : 'balance'),
   );
 }

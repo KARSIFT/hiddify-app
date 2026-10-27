@@ -143,6 +143,7 @@ class ConnectionRepositoryImpl with ExceptionHandler, InfraLogger implements Con
     final profiles = (await repo.watchAll().first).getOrElse((err) => throw err);
     final sources = <({String id, String name, Map<String, dynamic> config})>[];
     for (final source in profiles) {
+      if (AggregateMode.fromId(source.id) != null) continue;
       final content = await profilePathResolver.file(source.id).readAsString();
       sources.add((id: source.id, name: source.name, config: jsonDecode(content) as Map<String, dynamic>));
     }

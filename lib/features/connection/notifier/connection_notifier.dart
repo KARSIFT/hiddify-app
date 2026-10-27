@@ -119,7 +119,7 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
     }
   }
 
-  Future<void> reconnect(ProfileEntity? profile) async {
+  Future<void> reconnect(ProfileEntity? profile, {bool reportError = true}) async {
     if (state case AsyncData(:final value) when value == const Connected()) {
       if (profile == null) {
         loggy.info("no active profile, disconnecting");
@@ -127,13 +127,15 @@ class ConnectionNotifier extends _$ConnectionNotifier with AppLogger {
       }
       loggy.info("active profile changed, reconnecting");
       await ref.read(Preferences.startedByUser.notifier).update(true);
-      await _connectionRepo.reconnect(profile, ref.read(Preferences.disableMemoryLimit)).mapLeft((err) async {
+      final result = await _connectionRepo.reconnect(profile, ref.read(Preferences.disableMemoryLimit)).run();
+      await result.match((err) async {
         loggy.warning("error reconnecting", err);
         state = AsyncError(err, StackTrace.current);
+        if (!reportError) throw err;
         await ref
             .read(dialogNotifierProvider.notifier)
             .showCustomAlertFromErr(err.present(ref.read(translationsProvider).requireValue));
-      }).run();
+      }, (_) => Future<void>.value());
     }
   }
 
@@ -217,6 +219,4 @@ class SingleCall {
 }
 
 /// Whether the core is hot reloading; only the connection button shows it.
-final hotReloadingProvider = StreamProvider<bool>(
-  (ref) => ref.watch(connectionRepositoryProvider).watchHotReloading(),
-);
+final hotReloadingProvider = StreamProvider<bool>((ref) => ref.watch(connectionRepositoryProvider).watchHotReloading());

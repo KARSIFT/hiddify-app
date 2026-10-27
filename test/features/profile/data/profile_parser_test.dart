@@ -198,17 +198,9 @@ void main() {
           (id: 'two', name: 'Provider', config: config('two.example')),
         ], strategy: strategy);
         final out = (result.config['outbounds'] as List).cast<Map<String, dynamic>>();
-        if (strategy == 'lowest-delay') {
-          expect(result.outboundTag, 'lowest');
-          expect(out.any((o) => {'balancer', 'urltest', 'selector'}.contains(o['type'])), false);
-          expect(out.where((o) => !(o['tag'] as String).contains('§hide§')), hasLength(2));
-        } else {
-          final group = out.first;
-          expect(result.outboundTag, group['tag']);
-          expect(group['strategy'], strategy);
-          expect(group['outbounds'], hasLength(2));
-          expect(out.where((o) => o['type'] == 'balancer'), hasLength(1));
-        }
+        expect(result.outboundTag, strategy == 'lowest-delay' ? 'lowest' : 'balance');
+        expect(out.any((o) => {'balancer', 'urltest', 'selector'}.contains(o['type'])), false);
+        expect(out.where((o) => !(o['tag'] as String).contains('§hide§')), hasLength(2));
         expect(out.map((o) => o['tag']).toSet(), hasLength(out.length));
         final servers = out.where((o) => o['type'] == 'socks').toList();
         expect(servers.map((o) => o['server']), ['one.example', 'two.example']);
@@ -216,6 +208,42 @@ void main() {
           expect(out.any((o) => o['type'] == 'direct' && o['tag'] == server['detour']), true);
         }
         expect(((first['outbounds'] as List).first as Map<String, dynamic>)['tag'], 'same');
+      }
+    });
+
+    test('excludes nested automatic groups while keeping servers named Lowest or Balance', () {
+      for (final strategy in ['lowest-delay', 'round-robin']) {
+        final result = aggregateConfig([
+          (
+            id: 'one',
+            name: 'Provider',
+            config: {
+              'outbounds': [
+                {'type': 'socks', 'tag': 'Lowest', 'server': 'one.example', 'server_port': 1080},
+                {'type': 'socks', 'tag': 'Balance', 'server': 'two.example', 'server_port': 1080},
+                {
+                  'type': 'balancer',
+                  'tag': 'lowest',
+                  'outbounds': ['Lowest', 'Balance'],
+                },
+                {
+                  'type': 'balancer',
+                  'tag': 'balance',
+                  'outbounds': ['lowest'],
+                },
+                {
+                  'type': 'future-group',
+                  'tag': 'nested',
+                  'outbounds': ['balance'],
+                },
+              ],
+            },
+          ),
+        ], strategy: strategy);
+        final out = (result.config['outbounds'] as List).cast<Map<String, dynamic>>();
+        expect(out, hasLength(2));
+        expect(out.every((node) => node['type'] == 'socks'), true);
+        expect(out.every((node) => !node.containsKey('outbounds')), true);
       }
     });
 
