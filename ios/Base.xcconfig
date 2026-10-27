@@ -6,5 +6,6 @@
 //
 
 BASE_BUNDLE_IDENTIFIER=com.karsift.hiddify
-SERVICE_IDENTIFIER=com.karsift.hiddify
+// Flutter channel namespace must match the shared Dart mobile interface.
+SERVICE_IDENTIFIER=com.hiddify.app
 // Set DEVELOPMENT_TEAM when signing this fork with your Apple Developer account.
