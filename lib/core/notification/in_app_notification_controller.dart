@@ -18,21 +18,16 @@ enum NotificationType { info, error, success }
 typedef ToastAction = ({String label, VoidCallback onPressed});
 
 class InAppNotificationController with AppLogger {
+  static ToastificationItem? _latest;
+
   ToastificationItem? _show(String message, {NotificationType type = NotificationType.info, ToastAction? action}) {
     // Notifications raised during bootstrap (before runApp) have no overlay to
     // attach to, and toastification throws when it cannot find one. Swallow
     // that so a notification can never abort startup or crash the app.
     try {
-      // dismissAll animates old cards out while the new one is already visible.
-      // Remove synchronously so rapid/repeated update results cannot stack.
-      for (final manager in toastification.managers.values) {
-        for (final item in manager.notifications.toList()) {
-          toastification.dismiss(item, showRemoveAnimation: false);
-        }
-      }
       final text = Text(message, maxLines: 6, softWrap: true, overflow: TextOverflow.ellipsis);
       late final ToastificationItem item;
-      return item = toastification.show(
+      item = toastification.show(
         title: ToastHoverPause(
           item: () => item,
           child: action == null
@@ -55,8 +50,10 @@ class InAppNotificationController with AppLogger {
         // the button's own padding stands in for the toast's at the end
         padding: action == null ? null : const EdgeInsetsDirectional.fromSTEB(20, 16, 4, 16),
         type: type._toastificationType,
-        // Also avoid overlap when a new result arrives during auto-dismissal.
-        animationDuration: Duration.zero,
+        // An auto-dismissed card may already have left the manager's list.
+        // Hide its outgoing animation so a new result cannot overlap it.
+        animationBuilder: (context, animation, alignment, child) =>
+            animation.status == AnimationStatus.reverse ? const SizedBox.shrink() : child,
         alignment: AlignmentDirectional.bottomCenter,
         margin: const EdgeInsets.only(bottom: 64 + 16, right: 16, left: 16),
         // 4 s, a Material 3 snackbar's time; 8 s with a button, to read it and reach the button
@@ -72,6 +69,21 @@ class InAppNotificationController with AppLogger {
           showType: action == null ? CloseButtonShowType.onHover : CloseButtonShowType.none,
         ),
       );
+      final previous = _latest;
+      _latest = item;
+      // show() queues insertion until the end of the frame. Dismiss only after
+      // that insertion: otherwise queued messages escape dismissAll, and removing
+      // the final card early can destroy the overlay before its replacement lands.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (previous != null) {
+          toastification.dismiss(previous, showRemoveAnimation: false);
+        }
+        if (item != _latest || item.timeStatus == ToastTimeStatus.finished) {
+          toastification.dismiss(item, showRemoveAnimation: false);
+        }
+      });
+      WidgetsBinding.instance.scheduleFrame();
+      return item;
     } catch (e, stackTrace) {
       loggy.warning("failed to show notification, overlay may not be ready", e, stackTrace);
       return null;
