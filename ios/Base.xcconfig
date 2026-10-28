@@ -5,6 +5,7 @@
 //  Created by GFWFighter on 7/24/1402 AP.
 //
 
-BASE_BUNDLE_IDENTIFIER=apple.hiddify.com
+BASE_BUNDLE_IDENTIFIER=com.karsift.hiddify
+// Flutter channel namespace must match the shared Dart mobile interface.
 SERVICE_IDENTIFIER=com.hiddify.app
-DEVELOPMENT_TEAM=3JFTY5BP58
+// Set DEVELOPMENT_TEAM when signing this fork with your Apple Developer account.

@@ -154,7 +154,7 @@ class UpdateProfileNotifier extends _$UpdateProfileNotifier with AppLogger {
 
               await ref.read(activeProfileProvider.future).then((active) async {
                 if (active != null && (active.id == profile.id || AggregateMode.fromId(active.id) != null)) {
-                  await ref.read(connectionNotifierProvider.notifier).reconnect(active);
+                  await ref.read(connectionNotifierProvider.notifier).reconnect(active, reportError: false);
                 }
               });
               return unit;
@@ -163,14 +163,15 @@ class UpdateProfileNotifier extends _$UpdateProfileNotifier with AppLogger {
           .run();
     });
 
-    // Single, user-initiated updates report failure via a dialog; success is
-    // shown inline by the button indicator. Bulk runs stay silent here and are
-    // summarized in one aggregate toast by ForegroundProfilesUpdateNotifier.
+    // Update errors replace the current notification instead of stacking modal
+    // dialogs. Bulk runs stay silent here and report one summary at the end.
     if (state case AsyncError(:final error) when !isBulk) {
       final t = ref.read(translationsProvider).requireValue;
       ref
-          .read(dialogNotifierProvider.notifier)
-          .showCustomAlertFromErr(t.presentError(error, action: t.pages.profiles.msg.update.failure));
+          .read(inAppNotificationControllerProvider)
+          .showErrorToast(
+            t.presentShortError(error, action: t.pages.profiles.msg.update.failureNamed(name: profile.name)),
+          );
     }
 
     // Hold the success/failure result for 2s so the leading can flash an icon,

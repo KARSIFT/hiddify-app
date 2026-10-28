@@ -1,0 +1,22 @@
+Hiddify Karsift iOS build — signing required
+
+This IPA is unsigned and cannot be installed directly on an iPhone.
+It includes the app and its HiddifyPacketTunnel VPN extension.
+
+When an Apple Developer membership and signing identities are available:
+1. Register com.karsift.hiddify and com.karsift.hiddify.HiddifyPacketTunnel.
+2. Register the shared app group group.com.karsift.hiddify for both targets.
+3. Enable the Network Extensions / packet-tunnel capability and generate
+   matching provisioning profiles for the app and extension. Match every
+   entitlement to the capabilities permitted by the signing profiles.
+4. Open ios/Runner.xcworkspace in Xcode, select your development team for
+   both targets and archive the same source revision shown in BUILD-INFO-iOS.txt.
+5. Export with your chosen distribution method and its provisioning profiles.
+   For development or ad-hoc distribution, register the destination devices.
+
+Alternatively, a signing pipeline can sign the nested frameworks, extension
+and app in that order, embed each target's matching provisioning profile,
+and repackage Payload as an IPA. A normal personal/free signing profile is
+not sufficient for the VPN extension's required capabilities.
+
+No Apple certificates, private keys or provisioning profiles are included.

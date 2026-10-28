@@ -1,4 +1,4 @@
-name: Karšift Windows and Android
+name: Karšift platform builds
 on:
   workflow_dispatch:
     inputs:
@@ -12,13 +12,14 @@ on:
         default: ''
   push:
     tags: ['v*-karsift.*']
+    branches: ['codex/subscription-pool-notifications']
 
 permissions:
   contents: read
 
 concurrency:
   group: windows-karsift-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') }}
 
 jobs:
   test:
@@ -50,8 +51,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $archive = Join-Path $env:RUNNER_TEMP 'hiddify-lib-windows-amd64.tar.gz'
-          Invoke-WebRequest 'https://github.com/hiddify/hiddify-core/releases/download/draft/hiddify-lib-windows-amd64.tar.gz' -OutFile $archive
-          $expected = '9841148d26f5d39bb96949f54a8c61c7267bab878b0f9e6e6437a01e26b0c1d1'
+          Invoke-WebRequest 'https://github.com/hiddify/hiddify-core/releases/download/v5.0.3/hiddify-lib-windows-amd64.tar.gz' -OutFile $archive
+          $expected = '645ef71fb7e6e51cdd8b29b43c9ddea241b2324dcf441df7210d3332e39f2443'
           if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
             throw 'Native core changed; review and update the pinned digest before rebuilding.'
           }
@@ -77,7 +78,7 @@ jobs:
           Compress-Archive -Path "$bundle/*" -DestinationPath "out/$zip"
           $hash = (Get-FileHash "out/$zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $zip" | Set-Content out/SHA256SUMS-Windows.txt -Encoding ascii
-          "Native core SHA256: 9841148d26f5d39bb96949f54a8c61c7267bab878b0f9e6e6437a01e26b0c1d1`nSource commit: $env:GITHUB_SHA" | Set-Content out/BUILD-INFO-Windows.txt
+          "Native core SHA256: 645ef71fb7e6e51cdd8b29b43c9ddea241b2324dcf441df7210d3332e39f2443`nSource commit: $env:GITHUB_SHA" | Set-Content out/BUILD-INFO-Windows.txt
       - name: Build Windows installer
         shell: pwsh
         run: |
@@ -118,8 +119,8 @@ jobs:
           packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;28.2.13676358'
       - name: Download verified Android core
         run: |
-          curl --fail --location --retry 3 https://github.com/hiddify/hiddify-core/releases/download/draft/hiddify-lib-android.tar.gz -o "$RUNNER_TEMP/android-core.tar.gz"
-          echo "f7d3440b15272401b79ce0f108fa27d14072142c5eca395687cc1e87add0f78e  $RUNNER_TEMP/android-core.tar.gz" | sha256sum --check
+          curl --fail --location --retry 3 https://github.com/hiddify/hiddify-core/releases/download/v5.0.3/hiddify-lib-android.tar.gz -o "$RUNNER_TEMP/android-core.tar.gz"
+          echo "2a18ad4d9781e61901d5fb1c1edca28b8abadb9b36184055fed37091f97bc769  $RUNNER_TEMP/android-core.tar.gz" | sha256sum --check
           mkdir -p android/app/libs
           tar -xzf "$RUNNER_TEMP/android-core.tar.gz" -C android/app/libs
       - name: Prepare persistent release signing key
@@ -153,16 +154,65 @@ jobs:
           cp "$apk" "out/Hiddify-Karsift-$version-Android-universal.apk"
           cd out
           sha256sum *.apk > SHA256SUMS-Android.txt
-          printf 'Source commit: %s\nNative core SHA256: f7d3440b15272401b79ce0f108fa27d14072142c5eca395687cc1e87add0f78e\n' "$GITHUB_SHA" > BUILD-INFO-Android.txt
+          printf 'Source commit: %s\nNative core SHA256: 2a18ad4d9781e61901d5fb1c1edca28b8abadb9b36184055fed37091f97bc769\n' "$GITHUB_SHA" > BUILD-INFO-Android.txt
       - uses: actions/upload-artifact@v6
         with:
           name: android-installable
           path: out/*
           retention-days: 14
 
+  apple:
+    needs: test
+    runs-on: macos-15
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macos, ios]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2.21.0
+        with:
+          flutter-version: '3.38.5'
+          cache: true
+      - name: Download verified Apple core
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          if [ "$PLATFORM" = macos ]; then
+            digest=6d28855732f8a2d8f1f65193204c632b9cfe38aaa2bbc6951d5bddfea5d0e06a
+            destination=hiddify-core/bin
+          else
+            digest=fb3d24c7c7310ceeff08280b44d6ae5ae66c1185093297854f0361cb16e927cf
+            destination=ios/Frameworks
+          fi
+          archive="$RUNNER_TEMP/apple-core.tar.gz"
+          curl --fail --location --retry 3 "https://github.com/hiddify/hiddify-core/releases/download/v5.0.3/hiddify-lib-$PLATFORM.tar.gz" -o "$archive"
+          echo "$digest  $archive" | shasum -a 256 --check
+          mkdir -p "$destination"
+          tar -xzf "$archive" -C "$destination"
+      - run: flutter pub get
+      - run: dart run build_runner build --delete-conflicting-outputs
+      - run: dart run slang
+      - name: Build macOS application
+        if: matrix.platform == 'macos'
+        run: flutter build macos --release --target lib/main_prod.dart
+      - name: Build iOS application for later signing
+        if: matrix.platform == 'ios'
+        run: flutter build ios --release --no-codesign --target lib/main_prod.dart --verbose
+      - name: Package Apple build
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: bash scripts/package_apple.sh "$PLATFORM"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.platform }}-package
+          path: out/*
+          retention-days: 14
+
   release:
-    if: always() && needs.windows.result == 'success' && (needs.android.result == 'success' || (needs.android.result == 'skipped' && inputs.reuse-android-run != '')) && (startsWith(github.ref, 'refs/tags/') || inputs.release-tag != '')
-    needs: [windows, android]
+    if: always() && needs.windows.result == 'success' && needs.apple.result == 'success' && (needs.android.result == 'success' || (needs.android.result == 'skipped' && inputs.reuse-android-run != '')) && (startsWith(github.ref, 'refs/tags/') || inputs.release-tag != '')
+    needs: [windows, android, apple]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -181,6 +231,11 @@ jobs:
           run-id: ${{ inputs.reuse-android-run || github.run_id }}
           github-token: ${{ github.token }}
           path: out
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: '*-package'
+          merge-multiple: true
+          path: out
       - name: Verify reused APK source compatibility
         if: inputs.reuse-android-run != ''
         run: |
@@ -189,16 +244,20 @@ jobs:
           git diff --exit-code "$source" "$GITHUB_SHA" -- . ':!windows/**' ':!.github/**'
       - uses: softprops/action-gh-release@v2
         with:
-          name: Hiddify Karšift ${{ inputs.release-tag || github.ref_name }} — Windows and Android
+          name: Hiddify Karšift ${{ inputs.release-tag || github.ref_name }} — macOS, Windows, Android and iOS
           tag_name: ${{ inputs.release-tag || github.ref_name }}
           target_commitish: ${{ github.sha }}
           prerelease: true
           files: out/*
           fail_on_unmatched_files: true
           body: |
-            Installable Windows 11 x64 and Android test release with Lowest latency and Balance across all saved subscriptions.
+            macOS, Windows 11 x64, Android and unsigned iOS test release with Lowest latency and Balance across all saved subscriptions.
 
             Windows: run the Setup.exe for a per-user installation, or extract the portable ZIP. Both store data beside the executable in hiddify_portable_data. The Windows binaries are unsigned. The installer uses a separate Karšift folder and retains profile data on uninstall.
+
+            macOS: open the DMG and copy Hiddify Karsift to Applications. This test build is ad-hoc signed and is not notarized by Apple.
+
+            iOS: the unsigned IPA is for later signing, not direct installation. See IOS-SIGNING.txt for the required app and VPN-extension provisioning.
 
             Android: install the signed universal APK. Its separate com.karsift.hiddify package can coexist with official Hiddify. Future Karšift APK updates use the same signing key. Device VPN permission must be granted by the owner.
 
