@@ -6,6 +6,8 @@ mkdir -p out
 if [ "$platform" = macos ]; then
   app='build/macos/Build/Products/Release/Hiddify Karsift.app'
   test -d "$app"
+  # Supply a classic icon for macOS/Xcode versions without Icon Composer support.
+  bash scripts/set_macos_icon.sh "$app"
   # Ad-hoc signing permits local testing; this is not Developer ID notarization.
   codesign --force --deep --sign - --entitlements macos/Runner/Release.entitlements "$app"
   codesign --verify --deep --strict "$app"

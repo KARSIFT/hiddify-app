@@ -23,7 +23,13 @@ class InAppNotificationController with AppLogger {
     // attach to, and toastification throws when it cannot find one. Swallow
     // that so a notification can never abort startup or crash the app.
     try {
-      toastification.dismissAll();
+      // dismissAll animates old cards out while the new one is already visible.
+      // Remove synchronously so rapid/repeated update results cannot stack.
+      for (final manager in toastification.managers.values) {
+        for (final item in manager.notifications.toList()) {
+          toastification.dismiss(item, showRemoveAnimation: false);
+        }
+      }
       final text = Text(message, maxLines: 6, softWrap: true, overflow: TextOverflow.ellipsis);
       late final ToastificationItem item;
       return item = toastification.show(
@@ -49,6 +55,8 @@ class InAppNotificationController with AppLogger {
         // the button's own padding stands in for the toast's at the end
         padding: action == null ? null : const EdgeInsetsDirectional.fromSTEB(20, 16, 4, 16),
         type: type._toastificationType,
+        // Also avoid overlap when a new result arrives during auto-dismissal.
+        animationDuration: Duration.zero,
         alignment: AlignmentDirectional.bottomCenter,
         margin: const EdgeInsets.only(bottom: 64 + 16, right: 16, left: 16),
         // 4 s, a Material 3 snackbar's time; 8 s with a button, to read it and reach the button
